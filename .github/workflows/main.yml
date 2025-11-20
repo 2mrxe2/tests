@@ -1,6 +1,6 @@
-name: WireGuard VPN Proof of Concept Test
+name: WireGuard VPN Fully Automated Proof of Concept
 
-# يسمح بتشغيل الـ Workflow يدوياً من واجهة GitHub
+# يسمح بالتشغيل اليدوي من واجهة GitHub
 on:
   workflow_dispatch:
 
@@ -14,30 +14,34 @@ jobs:
         run: echo "Starting WireGuard VPN Server on GitHub Runner..."
       
       - name: 📦 تثبيت WireGuard والأدوات اللازمة
-        # تحديث الحزم وتثبيت WireGuard و net-tools (للتشخيص)
         run: sudo apt-get update && sudo apt-get install -y wireguard net-tools
         
-      - name: 🔑 إعداد واجهة WireGuard وتفعيل التوجيه (NAT/Routing)
+      - name: 🔑 إعداد الواجهة وتوليد المفاتيح وعرضها
         env:
-          # يُمرر المفتاح الخاص للخادم من GitHub Secrets
-          SERVER_PRIVATE_KEY: ${{ secrets.VPN_SERVER_PRIVATE_KEY }}
-          # المفتاح العام لهاتفك الذي أرسلته
+          # المفتاح العام لهاتفك الذي زودتنا به
           CLIENT_PUBLIC_KEY:  '9Tqw+1M8fqzmeKGqGPqct45SsOv/kDPgdFIfrFWlSjA=' 
           SERVER_IP: 10.0.0.1
           CLIENT_IP: 10.0.0.2
         run: |
-          # 0. التحقق من وجود المفتاح الخاص للخادم
-          if [ -z "${SERVER_PRIVATE_KEY}" ]; then
-            echo "::error::SERVER_PRIVATE_KEY Secret is empty or missing. Check GitHub Secrets."
-            exit 1
-          fi
-
-          # 1. إنشاء ملف تهيئة wg0.conf باستخدام 'EOF' لضمان التنسيق السليم
+          # 1. توليد المفتاح الخاص للخادم وحفظه
+          wg genkey | sudo tee /etc/wireguard/server_private.key
+          sudo chmod 600 /etc/wireguard/server_private.key
+          
+          # 2. استخراج المفتاح العام للخادم
+          SERVER_PUBLIC_KEY=$(sudo cat /etc/wireguard/server_private.key | wg pubkey)
+          
+          # 3. طباعة المفتاح العام للخادم في الـ Logs (للاتصال!)
+          echo "================================================="
+          echo "🔥 المفتاح العام للخادم (SERVER PUBLIC KEY) الذي يجب وضعه في الهاتف هو:"
+          echo $SERVER_PUBLIC_KEY
+          echo "================================================="
+          
+          # 4. إنشاء ملف التهيئة
           sudo tee /etc/wireguard/wg0.conf << EOF
           [Interface]
           Address = ${SERVER_IP}/24
           ListenPort = 51820
-          PrivateKey = ${SERVER_PRIVATE_KEY}
+          PrivateKey = $(sudo cat /etc/wireguard/server_private.key)
           
           [Peer]
           PublicKey = ${CLIENT_PUBLIC_KEY}
@@ -45,18 +49,18 @@ jobs:
           PersistentKeepalive = 25
           EOF
           
-          # 2. تمكين IP Forwarding (ضروري لتوجيه الإنترنت)
+          # 5. تمكين IP Forwarding (توجيه الإنترنت)
           echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
           sudo sysctl -p
 
-          # 3. إعداد NAT (ل مشاركة إنترنت الـ Runner مع العميل)
+          # 6. إعداد NAT (ل مشاركة إنترنت الـ Runner مع العميل)
           sudo iptables -A FORWARD -i wg0 -j ACCEPT
           sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
           
-          # 4. تشغيل واجهة WireGuard
+          # 7. تشغيل واجهة WireGuard
           sudo wg-quick up wg0
           
-          # 5. عرض حالة الواجهة للتأكد
+          # 8. عرض حالة الواجهة للتأكد
           wg show wg0
 
       - name: ⏳ تشغيل الخادم لمدة 5 ساعات و 55 دقيقة (الحد الأقصى للتجربة)
@@ -69,13 +73,11 @@ jobs:
           echo ""
           echo "================================================="
           echo "الخادم سيعمل لمدة 5 ساعات و 55 دقيقة كحد أقصى. قم بالاتصال بهاتفك الآن."
-          # الانتظار لمدة طويلة للحفاظ على الـ Job قيد التشغيل
           sleep 5h55m
           echo "انتهى وقت التجربة. إيقاف VPN."
           
       - name: 🚫 إيقاف وتنظيف الواجهة
         if: always()
         run: |
-          # استخدام '|| true' لضمان عدم فشل الخطوة حتى لو لم تكن الواجهة موجودة
           sudo wg-quick down wg0 || true
           echo "Cleanup complete."
