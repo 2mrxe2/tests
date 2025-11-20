@@ -1,0 +1,64 @@
+name: WireGuard VPN Proof of Concept
+
+on:
+  # التشغيل يدويًا للسماح بالتشغيل مرة واحدة للاختبار
+  workflow_dispatch:
+
+jobs:
+  run-vpn-server:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🚀 Start VPN Server Job
+        run: echo "Starting WireGuard VPN Server on GitHub Runner..."
+      
+      - name: 📦 Install WireGuard
+        run: sudo apt-get update && sudo apt-get install -y wireguard net-tools
+        
+      - name: 🔑 Configure WireGuard Interface
+        env:
+          SERVER_PRIVATE_KEY: ${{ secrets.VPN_SERVER_PRIVATE_KEY }}
+          CLIENT_PUBLIC_KEY:  '**<أدخل المفتاح العام لهاتفك هنا>**' # استبدل
+          SERVER_IP: 10.0.0.1
+          CLIENT_IP: 10.0.0.2
+        run: |
+          # 1. إنشاء ملف تهيئة wg0.conf
+          echo "[Interface]" | sudo tee /etc/wireguard/wg0.conf
+          echo "Address = $SERVER_IP/24" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "ListenPort = 51820" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "PrivateKey = $SERVER_PRIVATE_KEY" | sudo tee -a /etc/wireguard/wg0.conf
+          
+          # 2. إضافة Peer (الهاتف)
+          echo "" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "[Peer]" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "PublicKey = $CLIENT_PUBLIC_KEY" | sudo tee -a /etc/wireguard/wg0.conf
+          echo "AllowedIPs = $CLIENT_IP/32" | sudo tee -a /etc/wireguard/wg0.conf
+          
+          # 3. تمكين IP Forwarding (ضروري لتوجيه الإنترنت)
+          echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
+          sudo sysctl -p
+          
+          # 4. إعداد NAT (الـ Runner هو المنفذ، عادةً eth0)
+          # هذه هي الخطوة التي "تشارك" الإنترنت
+          sudo iptables -A FORWARD -i wg0 -j ACCEPT
+          sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+          
+          # 5. تشغيل واجهة WireGuard
+          sudo wg-quick up wg0
+
+      - name: ⏳ Keep Runner Alive (6 Hours Max)
+        # هذا الأمر سيجعل الـ Job قيد التشغيل لمدة 5 ساعات و 55 دقيقة
+        # مما يتيح لك الوقت الكافي للاختبار قبل انتهاء الحد الأقصى
+        run: |
+          echo "VPN Server is running. Public IP of this runner is:"
+          curl ifconfig.me
+          echo ""
+          echo "The VPN will run for a maximum of 5 hours and 55 minutes."
+          echo "Connect your phone now using the client config below."
+          sleep 5h55m
+          echo "Time limit reached. Stopping VPN."
+          
+      - name: 🚫 Clean up
+        if: always()
+        run: |
+          sudo wg-quick down wg0
+          echo "Cleanup complete."
